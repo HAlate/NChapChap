@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="300" height="150" viewBox="0 0 300 150" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+        <linearGradient id="splashGrad-driver" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stop-color="#34C759"/>
+            <stop offset="100%" stop-color="#5FE387"/>
+        </linearGradient>
+        
+        <filter id="splashGlow-driver">
+            <feGaussianBlur stdDeviation="3" result="blur"/>
+            <feComposite in="SourceGraphic" in2="blur" operator="over"/>
+        </filter>
+    </defs>
+    
+    <!-- Logo agrandi pour splash -->
+    <g transform="translate(25, 25)">
+        <!-- Premier U -->
+        <path d="M20,70 Q20,20 60,20 L70,20 Q110,20 110,70 L110,85 Q110,120 70,120 L60,120 Q20,120 20,85 Z"
+              fill="url(#splashGrad-driver)" filter="url(#splashGlow-driver)"/>
+        
+        <!-- Deuxieme U -->
+        <path d="M130,70 Q130,20 170,20 L180,20 Q220,20 220,70 L220,85 Q220,120 180,120 L170,120 Q130,120 130,85 Z"
+              fill="url(#splashGrad-driver)" filter="url(#splashGlow-driver)"/>
+        
+        <!-- M (signal) -->
+        <path d="M240,120 L255,40 L270,70 L285,40 L300,120"
+              stroke="url(#splashGrad-driver)" stroke-width="12" fill="none"
+              stroke-linecap="round" stroke-linejoin="round"/>
+        
+        <!-- O (cercle) -->
+        <circle cx="340" cy="70" r="25" fill="none"
+                stroke="url(#splashGrad-driver)" stroke-width="12"/>
+        <circle cx="340" cy="70" r="8" fill="url(#splashGrad-driver)"/>
+    </g>
+</svg>

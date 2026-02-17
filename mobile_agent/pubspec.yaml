@@ -1,0 +1,57 @@
+name: mobile_agent
+description: "Driver app for urban mobility platform"
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.3.4 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  cupertino_icons: ^1.0.6
+  geolocator: ^12.0.0
+  http: ^1.2.2
+  mapbox_search: ^4.1.0
+  mapbox_maps_flutter: ^2.3.0
+  flutter_riverpod: ^2.4.0
+  riverpod_annotation: ^2.3.0
+  flutter_secure_storage: ^9.2.4
+  crypto: ^3.0.3
+  google_maps_flutter: ^2.6.0
+  url_launcher: ^6.2.6
+  go_router: ^13.0.0
+  flutter_animate: ^4.3.0
+  cached_network_image: ^3.3.0
+  supabase_flutter: ^2.10.3
+  flutter_dotenv: ^5.1.0
+  shared_preferences: ^2.2.2
+  web3dart: ^2.7.3
+  flutter_stripe: ^11.2.0
+  image_picker: ^1.0.7
+  sumup: ^0.13.0
+  intl: ^0.19.0
+  flutter_webrtc: ^1.0.0
+  permission_handler: ^11.0.1
+  flutter_svg: ^2.0.9
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+  riverpod_generator: ^2.3.0
+  build_runner: ^2.4.0
+
+dependency_overrides:
+  win32: ^5.8.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    - .env
+    - assets/icons/car_top.png
+    - assets/logos/svg/
+    - assets/icons/ios/
+    - assets/splash/
