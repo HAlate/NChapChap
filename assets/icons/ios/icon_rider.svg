@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+        <linearGradient id="grad-rider-icon" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stop-color="#FF6B35"/>
+            <stop offset="100%" stop-color="#FF9B6A"/>
+        </linearGradient>
+    </defs>
+    
+    <!-- Background rounded rectangle -->
+    <rect width="1024" height="1024" rx="180" fill="#FF6B35"/>
+    
+    <!-- UUMO Text/Logo in white -->
+    <g transform="translate(212, 312)">
+        <!-- Premier U -->
+        <path d="M0,100 Q0,0 50,0 L75,0 Q125,0 125,100 L125,125 Q125,200 75,200 L50,200 Q0,200 0,125 Z"
+              fill="#FFFFFF"/>
+        
+        <!-- Deuxieme U -->
+        <path d="M150,100 Q150,0 200,0 L225,0 Q275,0 275,100 L275,125 Q275,200 225,200 L200,200 Q150,200 150,125 Z"
+              fill="#FFFFFF"/>
+        
+        <!-- M -->
+        <path d="M300,200 L325,50 L350,125 L375,50 L400,200"
+              stroke="#FFFFFF" stroke-width="25" fill="none" 
+              stroke-linecap="round" stroke-linejoin="round"/>
+        
+        <!-- O -->
+        <circle cx="500" cy="100" r="45" fill="none" stroke="#FFFFFF" stroke-width="25"/>
+        <circle cx="500" cy="100" r="15" fill="#FFFFFF"/>
+    </g>
+</svg>

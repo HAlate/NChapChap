@@ -1,0 +1,859 @@
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:google_maps_flutter/google_maps_flutter.dart';
+import 'package:go_router/go_router.dart';
+import 'package:flutter_animate/flutter_animate.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../../../core/theme/app_theme.dart';
+import '../../../../services/tracking_service.dart';
+
+// --- Providers ---
+final trackingServiceProvider = Provider((ref) => TrackingService());
+final tripStreamProvider =
+    StreamProvider.family<Map<String, dynamic>, String>((ref, tripId) {
+  return ref.watch(trackingServiceProvider).watchTrip(tripId);
+});
+
+enum TripStatus {
+  driverEnRoute,
+  driverArrived,
+  tripStarted,
+  tripCompleted,
+}
+
+class DriverTrackingScreen extends ConsumerStatefulWidget {
+  final Map<String, dynamic> tripData;
+
+  const DriverTrackingScreen({
+    super.key,
+    required this.tripData,
+  });
+
+  @override
+  ConsumerState<DriverTrackingScreen> createState() =>
+      _DriverTrackingScreenState();
+}
+
+// Provider pour ├®couter la position du chauffeur depuis Supabase
+final driverPositionStreamProvider = StreamProvider.autoDispose<LatLng?>((ref) {
+  final driverId = Supabase.instance.client.auth.currentUser?.id;
+  if (driverId == null) return Stream.value(null);
+
+  return Supabase.instance.client
+      .from('driver_profiles')
+      .stream(primaryKey: ['id'])
+      .eq('id', driverId)
+      .map((data) {
+        if (data.isEmpty) return null;
+        final profile = data.first;
+        final lat = profile['current_lat'] as num?;
+        final lng = profile['current_lng'] as num?;
+        if (lat == null || lng == null) return null;
+        return LatLng(lat.toDouble(), lng.toDouble());
+      });
+});
+
+class _DriverTrackingScreenState extends ConsumerState<DriverTrackingScreen> {
+  Set<Polyline> _polylines = {};
+  GoogleMapController? _mapController;
+  late LatLng _pickupPosition;
+  late LatLng _destinationPosition;
+
+  @override
+  void initState() {
+    super.initState();
+    print('[DEBUG TRACKING] tripData re├ºu: ${widget.tripData}');
+    print('[DEBUG TRACKING] rider: ${widget.tripData['rider']}');
+    print('[DEBUG TRACKING] departure: ${widget.tripData['departure']}');
+    print('[DEBUG TRACKING] destination: ${widget.tripData['destination']}');
+
+    _pickupPosition = LatLng(
+      (widget.tripData['departure_lat'] as num?)?.toDouble() ?? 0.0,
+      (widget.tripData['departure_lng'] as num?)?.toDouble() ?? 0.0,
+    );
+    _destinationPosition = LatLng(
+      (widget.tripData['destination_lat'] as num?)?.toDouble() ?? 0.0,
+      (widget.tripData['destination_lng'] as num?)?.toDouble() ?? 0.0,
+    );
+
+    print('[DEBUG TRACKING] _pickupPosition: $_pickupPosition');
+    print('[DEBUG TRACKING] _destinationPosition: $_destinationPosition');
+  }
+
+  Future<void> _updatePolyline(LatLng driverPosition) async {
+    try {
+      final status = ref
+              .read(tripStreamProvider(widget.tripData['tripId']))
+              .value?['status'] ??
+          'accepted';
+      final destinationPoint =
+          status == 'started' ? _destinationPosition : _pickupPosition;
+
+      print(
+          '[DEBUG TRACKING] Trac├® de la polyline de $driverPosition vers $destinationPoint');
+
+      List<LatLng> polylineCoordinates = await ref
+          .read(trackingServiceProvider)
+          .getPolylinePoints(driverPosition, destinationPoint);
+
+      print('[DEBUG TRACKING] Polyline a ${polylineCoordinates.length} points');
+
+      if (polylineCoordinates.isNotEmpty) {
+        print('[DEBUG TRACKING] First point: ${polylineCoordinates.first}');
+        print('[DEBUG TRACKING] Last point: ${polylineCoordinates.last}');
+      }
+
+      if (polylineCoordinates.isNotEmpty && mounted) {
+        setState(() {
+          _polylines = {
+            Polyline(
+                polylineId: const PolylineId('route'),
+                points: polylineCoordinates,
+                color: AppTheme.primaryOrange,
+                width: 8,
+                visible: true,
+                zIndex: 1),
+          };
+        });
+        print(
+            '[DEBUG TRACKING] Polylines updated: ${_polylines.length} polylines, ${_polylines.first.points.length} points');
+      } else if (polylineCoordinates.isEmpty) {
+        print('[DEBUG TRACKING] No polyline points received, skipping update');
+      }
+    } catch (e, stackTrace) {
+      print('[DEBUG TRACKING] Error updating polyline: $e');
+      print('[DEBUG TRACKING] Stack trace: $stackTrace');
+    }
+  }
+
+  void _fitMapBounds(LatLng driverPosition) {
+    if (_mapController == null) return;
+
+    // Cr├®er les bounds pour inclure tous les points
+    final bounds = LatLngBounds(
+      southwest: LatLng(
+        [
+          driverPosition.latitude,
+          _pickupPosition.latitude,
+          _destinationPosition.latitude
+        ].reduce((a, b) => a < b ? a : b),
+        [
+          driverPosition.longitude,
+          _pickupPosition.longitude,
+          _destinationPosition.longitude
+        ].reduce((a, b) => a < b ? a : b),
+      ),
+      northeast: LatLng(
+        [
+          driverPosition.latitude,
+          _pickupPosition.latitude,
+          _destinationPosition.latitude
+        ].reduce((a, b) => a > b ? a : b),
+        [
+          driverPosition.longitude,
+          _pickupPosition.longitude,
+          _destinationPosition.longitude
+        ].reduce((a, b) => a > b ? a : b),
+      ),
+    );
+
+    _mapController!.animateCamera(CameraUpdate.newLatLngBounds(bounds, 100));
+  }
+
+  void _showCompletionDialog(String status) {
+    if (status != 'completed') return;
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      isDismissible: false,
+      enableDrag: false,
+      backgroundColor: Colors.transparent,
+      builder: (context) => _CompletionSheet(
+          rider: widget.tripData['rider'], price: widget.tripData['price']),
+    );
+  }
+
+  @override
+  void dispose() {
+    _mapController?.dispose();
+    super.dispose();
+  }
+
+  // Fonctions pour convertir le statut de la DB en texte/couleur
+  String _getStatusText(String status) {
+    switch (status) {
+      case 'accepted':
+        return 'En route vers le client';
+      case 'arrived':
+        return 'Arriv├® au point de d├®part';
+      case 'started':
+        return 'Course en cours';
+      case 'completed':
+        return 'Course termin├®e';
+      default:
+        return 'En attente...';
+    }
+  }
+
+  Color _getStatusColor(String status) {
+    switch (status) {
+      case 'accepted':
+        return Colors.blue;
+      case 'arrived':
+        return Colors.green;
+      case 'started':
+        return AppTheme.primaryOrange;
+      case 'completed':
+        return Colors.green;
+      default:
+        return Colors.grey;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final tripAsync = ref.watch(tripStreamProvider(widget.tripData['tripId']));
+    final driverPositionAsync = ref.watch(driverPositionStreamProvider);
+
+    // ├ëcouter les changements de position du chauffeur
+    ref.listen<AsyncValue<LatLng?>>(driverPositionStreamProvider, (prev, next) {
+      next.whenData((position) {
+        if (position != null && mounted) {
+          _mapController?.animateCamera(CameraUpdate.newLatLng(position));
+          _updatePolyline(position);
+        }
+      });
+    });
+
+    // ├ëcouter les changements de statut pour afficher la feuille de fin de course
+    ref.listen<AsyncValue<Map<String, dynamic>>>(
+        tripStreamProvider(widget.tripData['tripId']), (prev, next) {
+      _showCompletionDialog(next.value?['status'] ?? '');
+      final position = driverPositionAsync.value;
+      if (position != null) {
+        _updatePolyline(position);
+      }
+    });
+
+    // D├®terminer si on peut annuler
+    final status = tripAsync.value?['status'] as String?;
+    final canCancel =
+        status != 'completed' && status != 'cancelled' && status != null;
+
+    return Scaffold(
+      backgroundColor: theme.scaffoldBackgroundColor,
+      body: SafeArea(
+        child: Stack(
+          children: [
+            // Affiche un loader tant que la position du chauffeur n'est pas connue.
+            driverPositionAsync.when(
+              data: (driverPosition) {
+                if (driverPosition == null) {
+                  return const Center(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        CircularProgressIndicator(),
+                        SizedBox(height: 16),
+                        Text('Localisation en cours...'),
+                      ],
+                    ),
+                  );
+                }
+                return GoogleMap(
+                  initialCameraPosition:
+                      CameraPosition(target: driverPosition, zoom: 15),
+                  onMapCreated: (controller) async {
+                    _mapController = controller;
+                    // Tracer la polyline d├¿s que la carte est cr├®├®e
+                    await _updatePolyline(driverPosition);
+                    // Ajuster la cam├®ra pour voir tous les marqueurs
+                    _fitMapBounds(driverPosition);
+                  },
+                  markers: {
+                    Marker(
+                      markerId: const MarkerId('driver'),
+                      position: driverPosition,
+                      icon: BitmapDescriptor.defaultMarkerWithHue(
+                          BitmapDescriptor.hueOrange),
+                      infoWindow: InfoWindow(
+                        title: 'Vous',
+                        snippet: tripAsync.when(
+                            data: (trip) => _getStatusText(trip['status']),
+                            loading: () => 'Chargement...',
+                            error: (e, s) => 'Erreur'),
+                      ),
+                    ),
+                    Marker(
+                      markerId: const MarkerId('pickup'),
+                      position: _pickupPosition,
+                      icon: BitmapDescriptor.defaultMarkerWithHue(
+                          BitmapDescriptor.hueGreen),
+                      infoWindow: InfoWindow(
+                        title: 'D├®part',
+                        snippet: widget.tripData['departure'],
+                      ),
+                    ),
+                    Marker(
+                      markerId: const MarkerId('destination'),
+                      position: _destinationPosition,
+                      icon: BitmapDescriptor.defaultMarkerWithHue(
+                          BitmapDescriptor.hueRed),
+                      infoWindow: InfoWindow(
+                        title: 'Destination',
+                        snippet: widget.tripData['destination'],
+                      ),
+                    ),
+                  },
+                  polylines: _polylines,
+                  myLocationEnabled: false,
+                  myLocationButtonEnabled: false,
+                  zoomControlsEnabled: false,
+                );
+              },
+              loading: () => const Center(child: CircularProgressIndicator()),
+              error: (e, s) => Center(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    const Icon(Icons.error_outline,
+                        size: 48, color: Colors.red),
+                    const SizedBox(height: 16),
+                    Text('Erreur de localisation: $e'),
+                  ],
+                ),
+              ),
+            ),
+            Positioned(
+              top: 16,
+              left: 16,
+              child: Semantics(
+                label: 'Retour',
+                button: true,
+                child: CircleAvatar(
+                  backgroundColor: Colors.white,
+                  child: IconButton(
+                    icon: const Icon(Icons.arrow_back),
+                    onPressed: () => context.pop(),
+                  ),
+                ),
+              ),
+            ),
+            Positioned(
+              top: 16,
+              left: 0,
+              right: 0,
+              child: tripAsync.when(
+                  data: (trip) {
+                    final status = trip['status'] as String;
+                    return Center(
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 20, vertical: 12),
+                        decoration: BoxDecoration(
+                          color: _getStatusColor(status),
+                          borderRadius: BorderRadius.circular(24),
+                          boxShadow: [
+                            BoxShadow(
+                                color: Colors.black.withOpacity(0.2),
+                                blurRadius: 8,
+                                offset: const Offset(0, 2)),
+                          ],
+                        ),
+                        child: Text(
+                          _getStatusText(status),
+                          style: const TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 16),
+                        ),
+                      ).animate().fadeIn().scale(),
+                    );
+                  },
+                  loading: () => const SizedBox.shrink(),
+                  error: (e, s) => const SizedBox.shrink()),
+            ),
+            DraggableScrollableSheet(
+              initialChildSize: 0.35,
+              minChildSize: 0.35,
+              maxChildSize: 0.7,
+              builder: (context, scrollController) {
+                return Container(
+                  decoration: BoxDecoration(
+                    color: isDark ? AppTheme.surfaceDark : Colors.white,
+                    borderRadius: const BorderRadius.vertical(
+                      top: Radius.circular(24),
+                    ),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withOpacity(0.1),
+                        blurRadius: 16,
+                        offset: const Offset(0, -4),
+                      ),
+                    ],
+                  ),
+                  child: ListView(
+                    controller: scrollController,
+                    padding: const EdgeInsets.all(20),
+                    children: [
+                      Center(
+                        child: Container(
+                          width: 40,
+                          height: 4,
+                          decoration: BoxDecoration(
+                            color: Colors.grey[300],
+                            borderRadius: BorderRadius.circular(2),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 20),
+                      Row(
+                        children: [
+                          Container(
+                            width: 70,
+                            height: 70,
+                            decoration: BoxDecoration(
+                              color: AppTheme.primaryOrange.withOpacity(0.1),
+                              borderRadius: BorderRadius.circular(20),
+                            ),
+                            child: Icon(
+                              Icons.person,
+                              size: 35,
+                              color: AppTheme.primaryOrange,
+                            ),
+                          ).animate().scale(delay: 200.ms),
+                          const SizedBox(width: 16),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  widget.tripData['rider']?['full_name']
+                                          ?.toString() ??
+                                      widget.tripData['rider']?['name']
+                                          ?.toString() ??
+                                      'Passager',
+                                  style: theme.textTheme.titleLarge?.copyWith(
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ).animate().fadeIn(delay: 300.ms),
+                                const SizedBox(height: 4),
+                                Row(
+                                  children: [
+                                    const Icon(
+                                      Icons.star,
+                                      color: Colors.amber,
+                                      size: 18,
+                                    ),
+                                    const SizedBox(width: 4),
+                                    Text(
+                                      '${widget.tripData['rider']?['rating']?.toString() ?? '5.0'}',
+                                      style: theme.textTheme.bodyMedium,
+                                    ),
+                                  ],
+                                ).animate().fadeIn(delay: 400.ms),
+                              ],
+                            ),
+                          ),
+                          Column(
+                            children: [
+                              Semantics(
+                                label: 'Appeler le passager',
+                                button: true,
+                                child: CircleAvatar(
+                                  backgroundColor:
+                                      AppTheme.primaryOrange.withOpacity(0.1),
+                                  child: IconButton(
+                                    icon: Icon(
+                                      Icons.phone,
+                                      color: AppTheme.primaryOrange,
+                                    ),
+                                    onPressed: () {},
+                                  ),
+                                ),
+                              ).animate().scale(delay: 600.ms),
+                              const SizedBox(height: 8),
+                              Semantics(
+                                label: 'Envoyer un message',
+                                button: true,
+                                child: CircleAvatar(
+                                  backgroundColor:
+                                      AppTheme.primaryOrange.withOpacity(0.1),
+                                  child: IconButton(
+                                    icon: Icon(
+                                      Icons.message,
+                                      color: AppTheme.primaryOrange,
+                                    ),
+                                    onPressed: () {},
+                                  ),
+                                ),
+                              ).animate().scale(delay: 700.ms),
+                            ],
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 24),
+                      tripAsync.when(
+                        data: (trip) {
+                          final status = trip['status'] as String;
+                          if (status == 'accepted') {
+                            return _InfoCard(
+                              icon: Icons.navigation,
+                              title: 'En route',
+                              value: 'Vers le point de d├®part',
+                              color: Colors.blue,
+                            )
+                                .animate()
+                                .fadeIn(delay: 800.ms)
+                                .slideX(begin: -0.2);
+                          }
+                          if (status == 'arrived') {
+                            return _InfoCard(
+                              icon: Icons.check_circle,
+                              title: 'Arriv├®',
+                              value: 'En attente du passager',
+                              color: Colors.green,
+                            ).animate().fadeIn().scale();
+                          }
+                          return const SizedBox.shrink();
+                        },
+                        loading: () => const SizedBox.shrink(),
+                        error: (e, s) => const SizedBox.shrink(),
+                      ),
+                      const SizedBox(height: 16),
+                      _TripDetailRow(
+                        icon: Icons.location_on,
+                        iconColor: AppTheme.primaryOrange,
+                        label: 'D├®part',
+                        value: widget.tripData['departure'] ?? '',
+                      ).animate().fadeIn(delay: 900.ms),
+                      const Divider(height: 24),
+                      _TripDetailRow(
+                        icon: Icons.location_on,
+                        iconColor: Colors.red,
+                        label: 'Destination',
+                        value: widget.tripData['destination'] ?? '',
+                      ).animate().fadeIn(delay: 1000.ms),
+                      const Divider(height: 24),
+                      _TripDetailRow(
+                        icon: Icons.payments,
+                        iconColor: Colors.green,
+                        label: 'Prix',
+                        value: '${widget.tripData['price']} F',
+                      ).animate().fadeIn(delay: 1100.ms),
+                      const SizedBox(height: 24),
+                      // Boutons d'action contextuels
+                      tripAsync.when(
+                        data: (trip) {
+                          final status = trip['status'] as String;
+                          if (status == 'accepted') {
+                            return SizedBox(
+                              width: double.infinity,
+                              child: ElevatedButton.icon(
+                                onPressed: () async {
+                                  try {
+                                    // Mettre ├á jour le statut
+                                    await ref
+                                        .read(trackingServiceProvider)
+                                        .updateTripStatus(
+                                          widget.tripData['tripId'],
+                                          'arrived',
+                                        );
+                                    // Envoyer la notification au passager
+                                    await ref
+                                        .read(trackingServiceProvider)
+                                        .notifyRiderDriverArrived(
+                                            widget.tripData['tripId']);
+                                  } catch (e) {
+                                    if (mounted) {
+                                      ScaffoldMessenger.of(context)
+                                          .showSnackBar(
+                                        SnackBar(
+                                          content: Text('Erreur: $e'),
+                                          backgroundColor: Colors.red,
+                                        ),
+                                      );
+                                    }
+                                  }
+                                },
+                                icon: const Icon(Icons.location_on),
+                                label: const Text('Je suis arriv├®'),
+                                style: ElevatedButton.styleFrom(
+                                    backgroundColor: AppTheme.primaryGreen),
+                              ),
+                            ).animate().fadeIn(delay: 1200.ms).scale();
+                          }
+                          if (status == 'arrived') {
+                            return SizedBox(
+                              width: double.infinity,
+                              child: ElevatedButton.icon(
+                                onPressed: () => ref
+                                    .read(trackingServiceProvider)
+                                    .updateTripStatus(
+                                      widget.tripData['tripId'],
+                                      'started',
+                                    ),
+                                icon: const Icon(Icons.play_arrow),
+                                label: const Text('D├®marrer la course'),
+                                style: ElevatedButton.styleFrom(
+                                    backgroundColor: AppTheme.primaryOrange),
+                              ),
+                            ).animate().fadeIn(delay: 1200.ms).scale();
+                          }
+                          if (status == 'started') {
+                            return SizedBox(
+                              width: double.infinity,
+                              child: ElevatedButton.icon(
+                                onPressed: () => ref
+                                    .read(trackingServiceProvider)
+                                    .updateTripStatus(
+                                      widget.tripData['tripId'],
+                                      'completed',
+                                    ),
+                                icon: const Icon(Icons.check_circle),
+                                label: const Text('Terminer la course'),
+                                style: ElevatedButton.styleFrom(
+                                    backgroundColor: AppTheme.primaryGreen),
+                              ),
+                            ).animate().fadeIn(delay: 1200.ms).scale();
+                          }
+                          return const SizedBox.shrink();
+                        },
+                        loading: () =>
+                            const Center(child: CircularProgressIndicator()),
+                        error: (e, s) => Center(child: Text('Erreur: $e')),
+                      ),
+                    ],
+                  ),
+                );
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _InfoCard extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String value;
+  final Color color;
+
+  const _InfoCard({
+    required this.icon,
+    required this.title,
+    required this.value,
+    required this.color,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(16),
+        border: isDark ? Border.all(color: color.withOpacity(0.3)) : null,
+      ),
+      child: Row(
+        children: [
+          Icon(icon, color: color, size: 32),
+          const SizedBox(width: 16),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: color,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  value,
+                  style: theme.textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.bold,
+                    color: color,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _TripDetailRow extends StatelessWidget {
+  final IconData icon;
+  final Color iconColor;
+  final String label;
+  final String value;
+
+  const _TripDetailRow({
+    required this.icon,
+    required this.iconColor,
+    required this.label,
+    required this.value,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
+    return Row(
+      children: [
+        Icon(icon, color: iconColor, size: 24),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                label,
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.textTheme.bodySmall?.color,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                value,
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _CompletionSheet extends StatelessWidget {
+  final Map<String, dynamic> rider;
+  final int price;
+
+  const _CompletionSheet({
+    required this.rider,
+    required this.price,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+
+    return SafeArea(
+      child: Container(
+        height: MediaQuery.of(context).size.height * 0.6,
+        decoration: BoxDecoration(
+          color: isDark ? AppTheme.surfaceDark : Colors.white,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+        ),
+        padding: const EdgeInsets.all(24),
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(
+                Icons.check_circle,
+                color: Colors.green,
+                size: 80,
+              ).animate().scale(duration: 500.ms),
+              const SizedBox(height: 16),
+              Text(
+                'Course termin├®e!',
+                style: theme.textTheme.headlineMedium?.copyWith(
+                  fontWeight: FontWeight.bold,
+                ),
+              ).animate().fadeIn(delay: 200.ms),
+              const SizedBox(height: 8),
+              Text(
+                'Merci d\'avoir utilis├® nos services',
+                style: theme.textTheme.bodyMedium,
+              ).animate().fadeIn(delay: 300.ms),
+              const SizedBox(height: 32),
+              Container(
+                padding: const EdgeInsets.all(20),
+                decoration: BoxDecoration(
+                  color: isDark ? Colors.grey[900] : Colors.grey[100],
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: Column(
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text(
+                          'Prix de la course',
+                          style: theme.textTheme.bodyLarge,
+                        ),
+                        Text(
+                          '$price F',
+                          style: theme.textTheme.titleLarge?.copyWith(
+                            fontWeight: FontWeight.bold,
+                            color: AppTheme.primaryOrange,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ).animate().fadeIn(delay: 400.ms).scale(),
+              const SizedBox(height: 24),
+              Text(
+                'Notez votre client',
+                style: theme.textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.w600,
+                ),
+              ).animate().fadeIn(delay: 500.ms),
+              const SizedBox(height: 12),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: List.generate(
+                  5,
+                  (index) => Semantics(
+                    label: 'Note ${index + 1} ├®toile${index > 0 ? 's' : ''}',
+                    button: true,
+                    child: IconButton(
+                      icon: Icon(
+                        Icons.star,
+                        size: 40,
+                        color: Colors.amber,
+                      ),
+                      onPressed: () {},
+                    ),
+                  ).animate().scale(delay: (600 + index * 50).ms),
+                ),
+              ),
+              const SizedBox(height: 24),
+              Semantics(
+                label: 'Retour ├á l\'accueil',
+                button: true,
+                child: SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton(
+                    onPressed: () {
+                      context.go('/home');
+                    },
+                    child: const Text('Retour ├á l\'accueil'),
+                  ),
+                ),
+              ).animate().fadeIn(delay: 900.ms).scale(),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}

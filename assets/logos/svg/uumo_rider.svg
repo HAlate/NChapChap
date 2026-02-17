@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="200" height="80" viewBox="0 0 200 80" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+        <linearGradient id="grad-rider" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stop-color="#FF6B35"/>
+            <stop offset="100%" stop-color="#FF9B6A"/>
+        </linearGradient>
+        
+        <filter id="glow-rider">
+            <feGaussianBlur stdDeviation="2" result="blur"/>
+            <feComposite in="SourceGraphic" in2="blur" operator="over"/>
+        </filter>
+    </defs>
+    
+    <!-- Premier U -->
+    <path d="M10,50 Q10,20 30,20 L40,20 Q60,20 60,50 L60,60 Q60,70 40,70 L30,70 Q10,70 10,60 Z"
+          fill="url(#grad-rider)" filter="url(#glow-rider)"/>
+    
+    <!-- Deuxieme U -->
+    <path d="M70,50 Q70,20 90,20 L100,20 Q120,20 120,50 L120,60 Q120,70 100,70 L90,70 Q70,70 70,60 Z"
+          fill="url(#grad-rider)" filter="url(#glow-rider)"/>
+    
+    <!-- M (signal) -->
+    <path d="M130,70 L140,30 L150,50 L160,30 L170,70"
+          stroke="url(#grad-rider)" stroke-width="8" fill="none" 
+          stroke-linecap="round" stroke-linejoin="round"/>
+    
+    <!-- O (cercle) -->
+    <circle cx="185" cy="45" r="15" fill="none" 
+            stroke="url(#grad-rider)" stroke-width="8"/>
+    <circle cx="185" cy="45" r="4" fill="url(#grad-rider)"/>
+</svg>

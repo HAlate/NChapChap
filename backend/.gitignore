@@ -1,0 +1,20 @@
+# Node/TypeScript/Backend sécurité
+node_modules/
+dist/
+build/
+.env
+.env.*
+*.log
+*.sqlite
+*.db
+*.pem
+*.key
+*.crt
+coverage/
+tmp/
+.DS_Store
+package-lock.json
+yarn.lock
+.vscode/
+secrets.json
+config/local.js
